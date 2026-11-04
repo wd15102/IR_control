@@ -3,3 +3,7 @@ __pycache__/
 *.pyo
 .DS_Store
 config.json
+out.log
+push.log
+_push.bat
+_sshtest.bat

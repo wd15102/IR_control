@@ -36,6 +36,8 @@ RESP_SEND_DONE = "F1"
 
 CONFIG_FILE = "config.json"
 DEFAULT_BAUDRATE = 9600
+APP_VERSION = "2.0"
+AUTHOR = "吴东"
 
 # ==================== 主题 ====================
 class Theme:
@@ -426,6 +428,9 @@ class IRRemoteApp:
         tk.Label(txt, text="IR03T · USB INFRARED CONTROL SYSTEM",
                  bg=Theme.BG, fg=Theme.TEXT_DIM,
                  font=(Theme.FONT_TECH, 9)).pack(anchor="w")
+        tk.Label(txt, text="By " + AUTHOR + "  ·  v" + APP_VERSION,
+                 bg=Theme.BG, fg=Theme.CYAN,
+                 font=(Theme.FONT_CN, 9)).pack(anchor="w")
         right = tk.Frame(bar, bg=Theme.BG)
         right.pack(side="right", padx=16)
         self.hdr_led = LedIndicator(right, size=14)
@@ -580,8 +585,9 @@ class IRRemoteApp:
         tk.Label(bar, textvariable=self.status_var, bg=Theme.BG_PANEL,
                  fg=Theme.TEXT_DIM, font=(Theme.FONT_CN, 9), anchor="w").pack(
                      side="left", padx=12, pady=5)
-        tk.Label(bar, text="IR03T v2.0", bg=Theme.BG_PANEL, fg=Theme.TEXT_FAINT,
-                 font=(Theme.FONT_TECH, 9)).pack(side="right", padx=12, pady=5)
+        tk.Label(bar, text="By " + AUTHOR + "  ·  v" + APP_VERSION,
+                 bg=Theme.BG_PANEL, fg=Theme.TEXT_FAINT,
+                 font=(Theme.FONT_CN, 9)).pack(side="right", padx=12, pady=5)
 
     def _on_wheel(self, event):
         self.panel_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")

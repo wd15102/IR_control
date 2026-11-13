@@ -84,12 +84,23 @@ def match_layout_key(name):
     return None
 
 
-def layout_positions(buttons):
-    """按真实遥控器位置计算每个按键的 (row, col)"""
+def layout_positions(buttons, custom=None):
+    """按真实遥控器位置计算每个按键的 (row, col)，custom 可覆盖为自定义位置"""
+    custom = custom or {}
     used_pos = set()
     placed = {}
     deferred = []
     for name in buttons:
+        if name in custom:
+            try:
+                cr, cc = int(custom[name][0]), int(custom[name][1])
+            except Exception:
+                cr = cc = None
+            if cr is not None and 0 <= cr < 200 and 0 <= cc < REMOTE_COLS \
+                    and (cr, cc) not in used_pos:
+                placed[name] = (cr, cc)
+                used_pos.add((cr, cc))
+                continue
         key = match_layout_key(name)
         pos = REMOTE_POS[key] if key is not None else None
         if pos is not None and pos not in used_pos:
@@ -99,7 +110,13 @@ def layout_positions(buttons):
             deferred.append(name)
     extra_row, extra_col = REMOTE_LAYOUT_ROWS, 0
     for name in deferred:
+        while (extra_row, extra_col) in used_pos:
+            extra_col += 1
+            if extra_col >= REMOTE_COLS:
+                extra_col = 0
+                extra_row += 1
         placed[name] = (extra_row, extra_col)
+        used_pos.add((extra_row, extra_col))
         extra_col += 1
         if extra_col >= REMOTE_COLS:
             extra_col = 0
@@ -160,7 +177,8 @@ class NeonButton(tk.Canvas):
 
     def __init__(self, master, text, command=None, color=Theme.CYAN,
                  width=132, height=40, subtext=None, font_size=11, expand=False,
-                 icon=False, icon_command=None):
+                 icon=False, icon_command=None, draggable=False,
+                 drag_start=None, drag_move=None, drag_end=None):
         super().__init__(master, width=(1 if expand else width), height=height,
                          bg=Theme.BG_PANEL, highlightthickness=0, cursor="hand2")
         self._bw, self._bh = (1 if expand else width), height
@@ -174,9 +192,17 @@ class NeonButton(tk.Canvas):
         self._icon_box = None
         self.font = (Theme.FONT_CN, font_size, "bold")
         self.subfont = (Theme.FONT_MONO, max(7, font_size - 3))
+        self.draggable = draggable
+        self.drag_start = drag_start
+        self.drag_move = drag_move
+        self.drag_end = drag_end
+        self._drag_moved = False
+        self._drag_x = 0
+        self._drag_y = 0
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<Button-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_motion)
         self.bind("<ButtonRelease-1>", self._on_release)
         if expand:
             self.bind("<Configure>", self._on_resize)
@@ -207,10 +233,26 @@ class NeonButton(tk.Canvas):
     def _on_press(self, event):
         self.state = "active"
         self.draw()
+        self._drag_moved = False
+        self._drag_x, self._drag_y = event.x, event.y
+        if self.draggable and self.drag_start:
+            self.drag_start(event)
+
+    def _on_motion(self, event):
+        if not self.draggable:
+            return
+        if abs(event.x - self._drag_x) > 3 or abs(event.y - self._drag_y) > 3:
+            self._drag_moved = True
+        if self._drag_moved and self.drag_move:
+            self.drag_move(event)
 
     def _on_release(self, event):
         self.state = "hover"
         self.draw()
+        if self.draggable:
+            if self._drag_moved and self.drag_end:
+                self.drag_end(event)
+            return
         if self.icon_command and self._icon_box:
             x1, y1, x2, y2 = self._icon_box
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
@@ -486,7 +528,7 @@ class NeonConfirm(tk.Toplevel):
 
 # ==================== 遥控器窗口 ====================
 class RemoteWindow(tk.Toplevel):
-    """独立遥控器窗口（窄长，按真实遥控器位置布局）"""
+    """独立遥控器窗口（窄长，自适应，编辑模式下可拖拽摆位）"""
 
     def __init__(self, master, app):
         super().__init__(master)
@@ -494,8 +536,10 @@ class RemoteWindow(tk.Toplevel):
         self.title("遥控器")
         self.configure(bg=Theme.BG, highlightthickness=1,
                        highlightbackground=Theme.BORDER_HI)
-        self.geometry("400x640")
-        self.resizable(False, False)
+        self.geometry("420x680")
+        self.minsize(320, 420)
+        self.edit_mode = False
+        self.hl = None
         self._build()
 
     def _build(self):
@@ -504,16 +548,30 @@ class RemoteWindow(tk.Toplevel):
         self.title_var = tk.StringVar(value="遥控器")
         tk.Label(bar, textvariable=self.title_var, bg=Theme.BG, fg=Theme.TEXT,
                  font=(Theme.FONT_CN, 13, "bold")).pack(side="left")
-        NeonButton(bar, "关闭", self.destroy, Theme.RED, width=62, height=28,
-                   font_size=9).pack(side="right")
+        right = tk.Frame(bar, bg=Theme.BG)
+        right.pack(side="right")
+        self.edit_btn = NeonButton(right, "编辑", self.toggle_edit, Theme.AMBER,
+                                   width=64, height=28, font_size=9)
+        self.edit_btn.pack(side="left", padx=(0, 6))
+        NeonButton(right, "关闭", self.destroy, Theme.RED, width=62, height=28,
+                   font_size=9).pack(side="left")
+
+        self.hint_var = tk.StringVar(value="")
+        tk.Label(self, textvariable=self.hint_var, bg=Theme.BG, fg=Theme.AMBER,
+                 font=(Theme.FONT_CN, 9)).pack(fill="x", padx=14)
 
         body = tk.Frame(self, bg=Theme.BG_PANEL, highlightthickness=1,
                         highlightbackground=Theme.BORDER_HI)
-        body.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+        body.pack(fill="both", expand=True, padx=12, pady=(6, 12))
         self.grid = tk.Frame(body, bg=Theme.BG_PANEL)
         self.grid.pack(fill="both", expand=True, padx=10, pady=10)
-        for c in range(REMOTE_COLS):
-            self.grid.columnconfigure(c, weight=1)
+
+    def toggle_edit(self):
+        self.edit_mode = not self.edit_mode
+        self.edit_btn.set_text("完成编辑" if self.edit_mode else "编辑")
+        self.hint_var.set("编辑模式：按住按键拖动到目标位置（占用则交换）"
+                          if self.edit_mode else "")
+        self.refresh()
 
     def refresh(self):
         for w in self.grid.winfo_children():
@@ -521,25 +579,94 @@ class RemoteWindow(tk.Toplevel):
         app = self.app
         name = app.active_remote
         self.title_var.set("遥控器 · " + (name or "未选择"))
+        for c in range(REMOTE_COLS):
+            self.grid.columnconfigure(c, weight=1)
         if not name:
             tk.Label(self.grid, text="请先在主界面选择遥控器", bg=Theme.BG_PANEL,
                      fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 11)).grid(
                          row=0, column=0, columnspan=REMOTE_COLS, pady=40)
             return
-        buttons = app.config.get("remotes", {}).get(name, {}).get("buttons", {})
+        remote = app.config.get("remotes", {}).get(name, {})
+        buttons = remote.get("buttons", {})
         if not buttons:
             tk.Label(self.grid, text="暂无按键\n点击「学习按键」添加", bg=Theme.BG_PANEL,
                      fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 11)).grid(
                          row=0, column=0, columnspan=REMOTE_COLS, pady=40)
             return
-        placed = layout_positions(buttons)
+        placed = layout_positions(buttons, remote.get("layout"))
+        rows = max(r for r, _c in placed.values()) + 1
+        for r in range(rows):
+            self.grid.rowconfigure(r, weight=1)
+        self.hl = tk.Frame(self.grid,
+                           bg=blend(Theme.AMBER, Theme.BG_PANEL, 0.35),
+                           highlightthickness=1, highlightbackground=Theme.AMBER)
+        self.hl.grid(row=0, column=0)
+        self.hl.grid_remove()
         for nm, ch in sorted(buttons.items(), key=lambda x: x[1]):
             r, c = placed[nm]
             btn = NeonButton(self.grid, nm, lambda c=ch, n=nm: app.send_ir(c, n),
-                             Theme.CYAN, width=64, height=44,
-                             subtext="CH " + format(ch, "02X"),
-                             font_size=9, expand=True)
-            btn.grid(row=r, column=c, padx=3, pady=3, sticky="nsew")
+                             Theme.CYAN, width=64, height=54, subtext=None,
+                             font_size=12, expand=True,
+                             draggable=self.edit_mode,
+                             drag_start=lambda e, n=nm: None,
+                             drag_move=lambda e, n=nm: self._drag_move(e, n),
+                             drag_end=lambda e, n=nm: self._drag_end(e, n))
+            btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
+
+    # -------------------- 拖拽摆位 --------------------
+    def _cell_at(self, event):
+        try:
+            gx = event.x_root - self.grid.winfo_rootx()
+            gy = event.y_root - self.grid.winfo_rooty()
+            col, row = self.grid.grid_location(gx, gy)
+            if row < 0 or col < 0:
+                return None
+            return row, col
+        except Exception:
+            return None
+
+    def _drag_move(self, event, name):
+        cell = self._cell_at(event)
+        if cell is None:
+            if self.hl is not None:
+                self.hl.grid_remove()
+            return
+        r, c = cell
+        if self.hl is not None:
+            self.hl.grid(row=r, column=c)
+
+    def _drag_end(self, event, name):
+        cell = self._cell_at(event)
+        if self.hl is not None:
+            self.hl.grid_remove()
+        if cell is None:
+            return
+        r, c = cell
+        remote = self.app.config["remotes"].get(self.app.active_remote)
+        if not remote:
+            return
+        layout = remote.setdefault("layout", {})
+        occupant = None
+        for other in remote.get("buttons", {}):
+            if other == name:
+                continue
+            opos = layout.get(other)
+            if opos is None:
+                key = match_layout_key(other)
+                opos = list(REMOTE_POS[key]) if key is not None else None
+            if opos is not None and list(opos)[:2] == [r, c]:
+                occupant = other
+                break
+        if occupant is not None:
+            old = layout.get(name)
+            if old is None:
+                key = match_layout_key(name)
+                old = list(REMOTE_POS[key]) if key is not None \
+                    else [REMOTE_LAYOUT_ROWS, 0]
+            layout[occupant] = old
+        layout[name] = [r, c]
+        self.app.save_config()
+        self.refresh()
 
 
 # ==================== 主应用 ====================

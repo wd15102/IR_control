@@ -449,7 +449,7 @@ class IRRemoteApp:
     def _build_body(self):
         body = tk.Frame(self.root, bg=Theme.BG)
         body.grid(row=2, column=0, sticky="nsew", padx=12, pady=(8, 0))
-        left = tk.Frame(body, bg=Theme.BG, width=300)
+        left = tk.Frame(body, bg=Theme.BG, width=320)
         left.pack_propagate(False)
         left.pack(side="left", fill="y")
         self._build_device_panel(left)
@@ -506,15 +506,20 @@ class IRRemoteApp:
         p.pack(fill="x", pady=(10, 0))
         self.info_labels = {}
         items = [("遥控器", "0"), ("按键总数", "0"), ("通道占用", "0/256"),
-                 ("协议版本", "IR03T v1.0")]
-        for k, v in items:
-            row = tk.Frame(p, bg=Theme.BG_PANEL)
-            row.pack(fill="x", padx=12, pady=2)
-            tk.Label(row, text=k, bg=Theme.BG_PANEL, fg=Theme.TEXT_DIM,
-                     font=(Theme.FONT_CN, 9), width=8, anchor="w").pack(side="left")
-            lbl = tk.Label(row, text=v, bg=Theme.BG_PANEL, fg=Theme.TEXT,
+                 ("协议版本", "v1.0")]
+        inner = tk.Frame(p, bg=Theme.BG_PANEL)
+        inner.pack(fill="x")
+        inner.columnconfigure(0, weight=1)
+        inner.columnconfigure(1, weight=1)
+        for i, (k, v) in enumerate(items):
+            r, c = divmod(i, 2)
+            cell = tk.Frame(inner, bg=Theme.BG_PANEL)
+            cell.grid(row=r, column=c, sticky="w", padx=(12, 4), pady=4)
+            tk.Label(cell, text=k, bg=Theme.BG_PANEL, fg=Theme.TEXT_DIM,
+                     font=(Theme.FONT_CN, 9), width=6, anchor="w").pack(side="left")
+            lbl = tk.Label(cell, text=v, bg=Theme.BG_PANEL, fg=Theme.TEXT,
                            font=(Theme.FONT_MONO, 9), anchor="w")
-            lbl.pack(side="left")
+            lbl.pack(side="left", padx=(4, 0))
             self.info_labels[k] = lbl
         self.update_info()
 

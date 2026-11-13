@@ -548,8 +548,8 @@ class IRRemoteApp:
         self.root = root
         self.root.title("电脑红外遥控器 - IR03T")
         self.root.configure(bg=Theme.BG)
-        self.root.geometry("1000x920")
-        self.root.minsize(880, 800)
+        self.root.geometry("1000x880")
+        self.root.minsize(880, 750)
         self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -752,7 +752,7 @@ class IRRemoteApp:
     def _build_footer(self):
         p = Panel(self.root, "系统日志 · TERMINAL", Theme.GREEN)
         p.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 4))
-        self.log_view = TerminalLog(p, height=6)
+        self.log_view = TerminalLog(p, height=9)
         self.log_view.pack(fill="x", padx=12, pady=(0, 10))
         bar = tk.Frame(self.root, bg=Theme.BG_PANEL)
         bar.grid(row=4, column=0, sticky="ew")
@@ -1008,19 +1008,17 @@ class IRRemoteApp:
             self._empty_hint("暂无按键\n点击「学习按键」添加")
             self.update_info()
             return
-        # 按真实遥控器的空间位置摆放
-        placed = layout_positions(buttons)
-
-        for name, ch in sorted(buttons.items(), key=lambda x: x[1]):
-            r, c = placed[name]
+        cols = 4
+        for i, (name, ch) in enumerate(sorted(buttons.items(), key=lambda x: x[1])):
+            r, c = divmod(i, cols)
             btn = NeonButton(self.panel_inner, name,
                              lambda c=ch, n=name: self.send_ir(c, n), Theme.CYAN,
-                             width=150, height=36,
+                             width=150, height=54,
                              subtext="CH " + format(ch, "02X"),
-                             font_size=9, expand=True, icon=True,
+                             font_size=10, expand=True, icon=True,
                              icon_command=lambda e, n=name, c=ch: self.show_edit_popup(e, n, c))
-            btn.grid(row=r, column=c, padx=4, pady=2, sticky="nsew")
-        for c in range(REMOTE_COLS):
+            btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
+        for c in range(cols):
             self.panel_inner.columnconfigure(c, weight=1)
         self.update_info()
         self.sync_remote_window()
@@ -1279,8 +1277,8 @@ def main():
     root = tk.Tk()
     root.title("电脑红外遥控器 - IR03T")
     root.configure(bg=Theme.BG)
-    root.geometry("1000x920")
-    root.minsize(880, 800)
+    root.geometry("1000x880")
+    root.minsize(880, 750)
 
     try:
         from tkinter import font as tkfont

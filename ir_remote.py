@@ -222,6 +222,23 @@ class NeonButton(tk.Canvas):
         self.color = color
         self.draw()
 
+    def _fit_font(self, text, avail, font):
+        """文字过宽时按比例缩小字号"""
+        if not text or avail <= 12:
+            return font
+        try:
+            import tkinter.font as tkfont
+            weight = font[2] if len(font) > 2 else "normal"
+            size = font[1]
+            f = tkfont.Font(font=(font[0], size, weight))
+            tw = f.measure(text)
+            if tw > avail:
+                size = max(6, int(size * avail / tw))
+                return (font[0], size, weight)
+        except Exception:
+            pass
+        return font
+
     def _on_enter(self, event):
         self.state = "hover"
         self.draw()
@@ -285,19 +302,21 @@ class NeonButton(tk.Canvas):
         # 内层填充
         self.create_polygon(chamfer_pts(3, 3, w - 4, h - 4, cut),
                             fill=blend(self.color, Theme.BG_CARD, fill_a), outline="")
-        # 文字
+        # 文字（自动缩小字号以适配按钮宽度）
         cx, cy = w / 2, h / 2
+        font = self._fit_font(self.text, w - 16, self.font)
         if self.subtext:
+            sfont = self._fit_font(self.subtext, w - 12, self.subfont)
             if h >= 50:
-                self.create_text(cx, cy - 6, text=self.text, fill=text_color, font=self.font)
+                self.create_text(cx, cy - 6, text=self.text, fill=text_color, font=font)
                 self.create_text(cx, cy + 12, text=self.subtext, fill=Theme.TEXT_DIM,
-                                 font=self.subfont)
+                                 font=sfont)
             else:
-                self.create_text(cx, cy - 5, text=self.text, fill=text_color, font=self.font)
+                self.create_text(cx, cy - 5, text=self.text, fill=text_color, font=font)
                 self.create_text(cx, cy + 10, text=self.subtext, fill=Theme.TEXT_DIM,
-                                 font=self.subfont)
+                                 font=sfont)
         else:
-            self.create_text(cx, cy + 0.5, text=self.text, fill=text_color, font=self.font)
+            self.create_text(cx, cy + 0.5, text=self.text, fill=text_color, font=font)
         if self.icon:
             self._draw_icon(text_color)
 
@@ -536,8 +555,8 @@ class RemoteWindow(tk.Toplevel):
         self.title("遥控器")
         self.configure(bg=Theme.BG, highlightthickness=1,
                        highlightbackground=Theme.BORDER_HI)
-        self.geometry("420x680")
-        self.minsize(320, 420)
+        self.geometry("470x740")
+        self.minsize(400, 480)
         self.edit_mode = False
         self.hl = None
         self._build()
@@ -605,8 +624,8 @@ class RemoteWindow(tk.Toplevel):
         for nm, ch in sorted(buttons.items(), key=lambda x: x[1]):
             r, c = placed[nm]
             btn = NeonButton(self.grid, nm, lambda c=ch, n=nm: app.send_ir(c, n),
-                             Theme.CYAN, width=64, height=54, subtext=None,
-                             font_size=12, expand=True,
+                             Theme.CYAN, width=64, height=58, subtext=None,
+                             font_size=13, expand=True,
                              draggable=self.edit_mode,
                              drag_start=lambda e, n=nm: None,
                              drag_move=lambda e, n=nm: self._drag_move(e, n),

@@ -865,20 +865,7 @@ class IRRemoteApp:
         if name in self.config["remotes"][self.active_remote]["buttons"]:
             messagebox.showwarning("提示", "按键 " + name + " 已存在")
             return
-        dlg2 = NeonDialog(self.root, "通道分配",
-                          "请输入通道号（0~FF 十六进制）\n推荐自动分配: " +
-                          format(free, "02X"), default=format(free, "02X"))
-        ch_str = dlg2.result
-        if not ch_str:
-            return
-        try:
-            channel = int(ch_str.strip(), 16)
-            if not (0 <= channel <= 255):
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("错误", "通道号无效, 请输入 0~FF 的十六进制数")
-            return
-        self._start_learn(name, channel)
+        self._start_learn(name, free)
 
     def _learn_worker(self, name, channel):
         ok, msg = self.learn_ir(channel)

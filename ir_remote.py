@@ -559,6 +559,9 @@ class IRRemoteApp:
         self._learn_busy = False
         self._loop_count = 0
         self.remote_win = None
+        # 自动连接：启动时自动发现串口并连接；手动断开后停止自动重连
+        self._auto_connect_allowed = True
+        self._last_auto_port = None
 
         self._build_header()
         self._build_body()
@@ -568,6 +571,8 @@ class IRRemoteApp:
         self.refresh_remote_list()
         self.log("IR03T 红外控制终端 v2.0 已就绪", "sys")
         self.log("协议: FA FD <CMD> <DATA> DF  |  学习 0x01 / 发射 0x02", "info")
+        self.auto_connect()
+        self._schedule_port_watch()
 
     # -------------------- UI 构建 --------------------
     def _build_header(self):
@@ -663,9 +668,10 @@ class IRRemoteApp:
         self.dev_led = LedIndicator(st, size=12)
         self.dev_led.pack(side="left")
         self.dev_status = tk.StringVar(value="未连接")
-        tk.Label(st, textvariable=self.dev_status, bg=Theme.BG_PANEL,
-                 fg=Theme.TEXT_DIM, font=(Theme.FONT_CN, 10)).pack(
-                     side="left", padx=8)
+        self.dev_status_label = tk.Label(st, textvariable=self.dev_status,
+                                         bg=Theme.BG_PANEL, fg=Theme.TEXT_DIM,
+                                         font=(Theme.FONT_CN, 10))
+        self.dev_status_label.pack(side="left", padx=8)
 
     def _build_info_panel(self, parent):
         p = Panel(parent, "状态信息 · STATUS", Theme.PURPLE)
@@ -802,27 +808,52 @@ class IRRemoteApp:
         else:
             self.connect()
 
-    def connect(self):
+    def connect(self, auto=False):
         port = self.port_var.get()
         if not port:
-            messagebox.showwarning("提示", "请先选择串口")
+            if not auto:
+                messagebox.showwarning("提示", "请先选择串口")
             return
         try:
             self.serial = serial.Serial(port, int(self.baud_var.get()), timeout=0.2)
             time.sleep(0.1)
-            self.dev_led.set_state("on", Theme.GREEN)
-            self.dev_led.start_pulse()
-            self.hdr_led.set_state("on", Theme.GREEN)
-            self.hdr_led.start_pulse()
-            self.hdr_status.set("在线 · " + port)
-            self.connect_btn.set_text("断 开")
-            self.connect_btn.set_color(Theme.AMBER)
-            self.set_status("已连接 " + port + " @ " + self.baud_var.get())
+            self._apply_connected(port)
+            self._auto_connect_allowed = True
             self.log("串口已连接: " + port + " @ " + self.baud_var.get() + " bps", "ok")
         except Exception as e:
-            self.log("串口连接失败: " + str(e), "err")
-            messagebox.showerror("连接失败", "无法打开串口 " + port + "\n\n" + str(e))
             self.serial = None
+            self._apply_disconnected()
+            if auto:
+                # 自动连接失败只在端口变化时记录，避免日志刷屏
+                if port != self._last_auto_port:
+                    self._last_auto_port = port
+                    self.log("自动连接失败: " + port + " - " + str(e), "warn")
+            else:
+                self.log("串口连接失败: " + str(e), "err")
+                messagebox.showerror("连接失败", "无法打开串口 " + port + "\n\n" + str(e))
+
+    def _apply_connected(self, port):
+        self.dev_led.set_state("on", Theme.GREEN)
+        self.dev_led.start_pulse()
+        self.hdr_led.set_state("on", Theme.GREEN)
+        self.hdr_led.start_pulse()
+        self.hdr_status.set("在线 · " + port)
+        self.dev_status.set("已连接")
+        self.dev_status_label.config(fg=Theme.GREEN)
+        self.connect_btn.set_text("断 开")
+        self.connect_btn.set_color(Theme.AMBER)
+        self.set_status("已连接 " + port + " @ " + self.baud_var.get())
+
+    def _apply_disconnected(self):
+        self.dev_led.set_state("off")
+        self.dev_led.stop_pulse()
+        self.hdr_led.set_state("off")
+        self.hdr_led.stop_pulse()
+        self.hdr_status.set("离线")
+        self.dev_status.set("未连接")
+        self.dev_status_label.config(fg=Theme.TEXT_DIM)
+        self.connect_btn.set_text("连 接")
+        self.connect_btn.set_color(Theme.CYAN)
 
     def disconnect(self):
         if self.serial:
@@ -831,15 +862,35 @@ class IRRemoteApp:
             except Exception:
                 pass
             self.serial = None
-        self.dev_led.set_state("off")
-        self.dev_led.stop_pulse()
-        self.hdr_led.set_state("off")
-        self.hdr_led.stop_pulse()
-        self.hdr_status.set("离线")
-        self.connect_btn.set_text("连 接")
-        self.connect_btn.set_color(Theme.CYAN)
+        self._auto_connect_allowed = False
+        self._apply_disconnected()
         self.set_status("已断开")
         self.log("串口已断开", "warn")
+
+    def auto_connect(self):
+        """自动连接当前选中的串口（启动 / 检测到设备插入时调用）"""
+        if not self._auto_connect_allowed:
+            return False
+        if self.serial and self.serial.is_open:
+            return True
+        if not self.port_var.get():
+            return False
+        self.connect(auto=True)
+        return bool(self.serial and self.serial.is_open)
+
+    def _schedule_port_watch(self):
+        """后台轮询串口，发现设备后自动发现并连接"""
+        if self._auto_connect_allowed and not (self.serial and self.serial.is_open):
+            try:
+                ports = list_serial_ports()
+                # 端口列表变化时才刷新下拉框，避免打断用户操作
+                if ports != list(self.port_combo["values"]):
+                    self.refresh_ports()
+                if ports:
+                    self.auto_connect()
+            except Exception:
+                pass
+        self.root.after(2000, self._schedule_port_watch)
 
     def send_frame(self, frame, timeout=0.5):
         if not self.serial or not self.serial.is_open:

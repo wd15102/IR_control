@@ -535,7 +535,7 @@ class RemoteWindow(tk.Toplevel):
         placed = layout_positions(buttons)
         for nm, ch in sorted(buttons.items(), key=lambda x: x[1]):
             r, c = placed[nm]
-            btn = NeonButton(self.grid, nm, lambda c=ch: app.send_ir(c),
+            btn = NeonButton(self.grid, nm, lambda c=ch, n=nm: app.send_ir(c, n),
                              Theme.CYAN, width=64, height=44,
                              subtext="CH " + format(ch, "02X"),
                              font_size=9, expand=True)
@@ -863,20 +863,21 @@ class IRRemoteApp:
         self.root.destroy()
 
     # -------------------- 红外操作 --------------------
-    def send_ir(self, channel):
+    def send_ir(self, channel, name=None):
         if not self._check_serial():
             return
-        self.log("发射红外 -> 通道 " + format(channel, "02X"), "cmd")
+        label = ("[" + name + "]") if name else ("通道 " + format(channel, "02X"))
+        self.log("发送 " + label + " 按键", "cmd")
         resp = self.send_frame(build_frame(CMD_SEND, channel))
         if check_resp(resp, RESP_SEND_DONE):
-            self.set_status("已发射: 通道 " + format(channel, "02X"))
-            self.log("发射完成, 模块反馈 " + RESP_SEND_DONE, "ok")
+            self.set_status("已发送: " + label)
+            self.log("发送完成, 模块反馈 " + RESP_SEND_DONE, "ok")
         elif resp:
-            self.set_status("发射反馈: " + repr(resp))
+            self.set_status("发送反馈: " + repr(resp))
             self.log("模块反馈异常: " + repr(resp), "warn")
         else:
-            self.set_status("已发射: 通道 " + format(channel, "02X") + " (无反馈)")
-            self.log("发射完成, 无反馈信号", "ok")
+            self.set_status("已发送: " + label + " (无反馈)")
+            self.log("发送完成, 模块无反馈", "ok")
 
     def learn_ir(self, channel):
         if not self.serial or not self.serial.is_open:
@@ -1013,7 +1014,7 @@ class IRRemoteApp:
         for name, ch in sorted(buttons.items(), key=lambda x: x[1]):
             r, c = placed[name]
             btn = NeonButton(self.panel_inner, name,
-                             lambda c=ch: self.send_ir(c), Theme.CYAN,
+                             lambda c=ch, n=name: self.send_ir(c, n), Theme.CYAN,
                              width=150, height=36,
                              subtext="CH " + format(ch, "02X"),
                              font_size=9, expand=True, icon=True,

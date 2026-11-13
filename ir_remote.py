@@ -92,7 +92,8 @@ class NeonButton(tk.Canvas):
     """切角霓虹按钮"""
 
     def __init__(self, master, text, command=None, color=Theme.CYAN,
-                 width=132, height=40, subtext=None, font_size=11, expand=False):
+                 width=132, height=40, subtext=None, font_size=11, expand=False,
+                 icon=False, icon_command=None):
         super().__init__(master, width=(1 if expand else width), height=height,
                          bg=Theme.BG_PANEL, highlightthickness=0, cursor="hand2")
         self._bw, self._bh = (1 if expand else width), height
@@ -101,6 +102,9 @@ class NeonButton(tk.Canvas):
         self.command = command
         self.color = color
         self.state = "normal"
+        self.icon = icon
+        self.icon_command = icon_command
+        self._icon_box = None
         self.font = (Theme.FONT_CN, font_size, "bold")
         self.subfont = (Theme.FONT_MONO, max(7, font_size - 3))
         self.bind("<Enter>", self._on_enter)
@@ -140,6 +144,11 @@ class NeonButton(tk.Canvas):
     def _on_release(self, event):
         self.state = "hover"
         self.draw()
+        if self.icon_command and self._icon_box:
+            x1, y1, x2, y2 = self._icon_box
+            if x1 <= event.x <= x2 and y1 <= event.y <= y2:
+                self.icon_command(event)
+                return
         if self.command:
             self.command()
 
@@ -175,6 +184,32 @@ class NeonButton(tk.Canvas):
                              font=self.subfont)
         else:
             self.create_text(cx, cy + 0.5, text=self.text, fill=text_color, font=self.font)
+        if self.icon:
+            self._draw_icon(text_color)
+
+    def _draw_icon(self, color):
+        """右上角铅笔图标"""
+        w, h = self._bw, self._bh
+        size = max(6, min(10, h * 0.26))
+        cx, cy = w - size - 6, size + 5
+        dx, dy = -0.7071, 0.7071
+        px, py = 0.7071, 0.7071
+        L, W = size, size * 0.40
+        bx, by = cx - dx * L / 2, cy - dy * L / 2
+        tx, ty = cx + dx * L / 2, cy + dy * L / 2
+        self.create_polygon(
+            bx + px * W / 2, by + py * W / 2,
+            bx - px * W / 2, by - py * W / 2,
+            tx - px * W / 2, ty - py * W / 2,
+            tx + px * W / 2, ty + py * W / 2,
+            fill=color, outline="")
+        self.create_polygon(
+            tx - px * W / 2, ty - py * W / 2,
+            tx + px * W / 2, ty + py * W / 2,
+            cx + dx * L * 0.80, cy + dy * L * 0.80,
+            fill=color, outline="")
+        self._icon_box = (cx - size * 1.15, cy - size * 1.15,
+                          cx + size * 1.15, cy + size * 1.15)
 
 
 class LedIndicator(tk.Canvas):
@@ -578,6 +613,8 @@ class IRRemoteApp:
         self.btn_loop = NeonButton(learn_row, "连续学习", self.learn_loop,
                                    Theme.PURPLE, width=150, height=36)
         self.btn_loop.pack(side="left")
+        tk.Label(learn_row, text="点右上角图标：删除 / 重新学习", bg=Theme.BG_PANEL,
+                 fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 9)).pack(side="right")
 
     def _build_footer(self):
         p = Panel(self.root, "系统日志 · TERMINAL", Theme.GREEN)
@@ -817,7 +854,8 @@ class IRRemoteApp:
                              lambda c=ch: self.send_ir(c), Theme.CYAN,
                              width=150, height=54,
                              subtext="CH " + format(ch, "02X"),
-                             font_size=10, expand=True)
+                             font_size=10, expand=True, icon=True,
+                             icon_command=lambda e, n=name, c=ch: self.show_edit_popup(e, n, c))
             btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
         for c in range(cols):
             self.panel_inner.columnconfigure(c, weight=1)
@@ -828,6 +866,84 @@ class IRRemoteApp:
         f.pack(expand=True)
         tk.Label(f, text=text, bg=Theme.BG_INPUT, fg=Theme.TEXT_FAINT,
                  font=(Theme.FONT_CN, 12)).pack(pady=50)
+
+    # -------------------- 按键编辑（右上角图标） --------------------
+    def show_edit_popup(self, event, name, channel):
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        outer = tk.Frame(win, bg=Theme.CYAN)
+        outer.pack(fill="both", expand=True)
+        inner = tk.Frame(outer, bg=Theme.BG_PANEL)
+        inner.pack(fill="both", expand=True, padx=1, pady=1)
+        NeonButton(inner, "重新学习",
+                   lambda: self._popup_run(win, name, channel, "learn"),
+                   Theme.CYAN, width=108, height=30, font_size=10).pack(padx=8, pady=(8, 4))
+        NeonButton(inner, "删除按键",
+                   lambda: self._popup_run(win, name, channel, "delete"),
+                   Theme.RED, width=108, height=30, font_size=10).pack(padx=8, pady=(4, 8))
+        win.update_idletasks()
+        pw, ph = 130, 94
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = min(max(0, event.x_root - 8), max(0, sw - pw))
+        y = min(max(0, event.y_root - 6), max(0, sh - ph))
+        win.geometry("+%d+%d" % (x, y))
+        self._popup = win
+        self._popup_bind = self.root.bind("<Button-1>", self._popup_click, add="+")
+        win.bind("<Escape>", lambda e: self._close_popup())
+        win.focus_set()
+
+    def _popup_run(self, win, name, channel, action):
+        self._close_popup()
+        if action == "learn":
+            self.relearn_button(name, channel)
+        else:
+            self.delete_button(name, channel)
+
+    def _close_popup(self):
+        win = getattr(self, "_popup", None)
+        if win is None:
+            return
+        self._popup = None
+        try:
+            self.root.unbind("<Button-1>", self._popup_bind)
+        except Exception:
+            pass
+        try:
+            win.destroy()
+        except Exception:
+            pass
+
+    def _popup_click(self, event):
+        win = getattr(self, "_popup", None)
+        if win is None:
+            return
+        try:
+            x = win.winfo_rootx()
+            y = win.winfo_rooty()
+            w = win.winfo_width()
+            h = win.winfo_height()
+        except Exception:
+            self._close_popup()
+            return
+        if not (x <= event.x_root <= x + w and y <= event.y_root <= y + h):
+            self._close_popup()
+
+    def relearn_button(self, name, channel):
+        if not self._check_serial():
+            return
+        self._start_learn(name, channel)
+
+    def delete_button(self, name, channel):
+        if not NeonConfirm(self.root, "删除按键",
+                           "确定删除按键「" + name + "」(CH " +
+                           format(channel, "02X") + ")？").result:
+            return
+        self.config["remotes"][self.active_remote]["buttons"].pop(name, None)
+        self.save_config()
+        self.render_buttons()
+        self.log("已删除按键: " + name + " (CH " + format(channel, "02X") + ")", "warn")
 
     # -------------------- 学习模式 --------------------
     def _next_free_channel(self):

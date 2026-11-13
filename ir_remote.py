@@ -39,6 +39,50 @@ DEFAULT_BAUDRATE = 9600
 APP_VERSION = "2.0"
 AUTHOR = "吴东"
 
+# ==================== 遥控器空间布局 ====================
+# 中国移动 CM311-5-CH 真实按键位置（5 列网格）
+REMOTE_COLS = 5
+REMOTE_LAYOUT_ROWS = 9
+
+REMOTE_LAYOUT = [
+    # (布局键, 别名, row, col)
+    ("电源", ["电源", "power"], 0, 0),
+    ("TV", ["tv"], 0, 4),
+    ("静音", ["静音", "mute"], 1, 0),
+    ("菜单", ["菜单", "menu", "三横线"], 1, 2),
+    ("设置", ["设置", "setting", "settings", "齿轮"], 1, 4),
+    ("上", ["上", "up"], 2, 2),
+    ("左", ["左", "left"], 3, 0),
+    ("OK", ["ok", "确定", "确认"], 3, 2),
+    ("右", ["右", "right"], 3, 4),
+    ("下", ["下", "down"], 4, 2),
+    ("主页", ["主页", "home", "首页"], 5, 0),
+    ("M", ["m"], 5, 2),
+    ("返回", ["返回", "back", "退回"], 5, 4),
+    ("音量+", ["音量+", "音量＋", "vol+", "音量加"], 6, 0),
+    ("频道+", ["频道+", "频道＋", "ch+", "频道加", "台+"], 6, 4),
+    ("麦克风", ["麦克风", "mic", "语音"], 7, 2),
+    ("音量-", ["音量-", "音量－", "vol-", "音量减"], 8, 0),
+    ("频道-", ["频道-", "频道－", "ch-", "频道减", "台-"], 8, 4),
+]
+
+REMOTE_POS = {key: (row, col) for key, _a, row, col in REMOTE_LAYOUT}
+REMOTE_ALIASES = {}
+for _key, _aliases, _r, _c in REMOTE_LAYOUT:
+    for _a in _aliases:
+        REMOTE_ALIASES[_a] = _key
+
+
+def match_layout_key(name):
+    """按按键名称匹配遥控器布局位置，返回布局键或 None"""
+    n = name.strip().lower()
+    if n in REMOTE_ALIASES:
+        return REMOTE_ALIASES[n]
+    for alias, key in REMOTE_ALIASES.items():
+        if len(alias) >= 2 and (alias in n or n in alias):
+            return key
+    return None
+
 # ==================== 主题 ====================
 class Theme:
     BG = "#070B14"
@@ -179,9 +223,14 @@ class NeonButton(tk.Canvas):
         # 文字
         cx, cy = w / 2, h / 2
         if self.subtext:
-            self.create_text(cx, cy - 6, text=self.text, fill=text_color, font=self.font)
-            self.create_text(cx, cy + 12, text=self.subtext, fill=Theme.TEXT_DIM,
-                             font=self.subfont)
+            if h >= 50:
+                self.create_text(cx, cy - 6, text=self.text, fill=text_color, font=self.font)
+                self.create_text(cx, cy + 12, text=self.subtext, fill=Theme.TEXT_DIM,
+                                 font=self.subfont)
+            else:
+                self.create_text(cx, cy - 5, text=self.text, fill=text_color, font=self.font)
+                self.create_text(cx, cy + 10, text=self.subtext, fill=Theme.TEXT_DIM,
+                                 font=self.subfont)
         else:
             self.create_text(cx, cy + 0.5, text=self.text, fill=text_color, font=self.font)
         if self.icon:
@@ -418,8 +467,8 @@ class IRRemoteApp:
         self.root = root
         self.root.title("电脑红外遥控器 - IR03T")
         self.root.configure(bg=Theme.BG)
-        self.root.geometry("1000x880")
-        self.root.minsize(880, 750)
+        self.root.geometry("1000x920")
+        self.root.minsize(880, 800)
         self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
 
@@ -619,7 +668,7 @@ class IRRemoteApp:
     def _build_footer(self):
         p = Panel(self.root, "系统日志 · TERMINAL", Theme.GREEN)
         p.grid(row=3, column=0, sticky="ew", padx=12, pady=(8, 4))
-        self.log_view = TerminalLog(p, height=9)
+        self.log_view = TerminalLog(p, height=6)
         self.log_view.pack(fill="x", padx=12, pady=(0, 10))
         bar = tk.Frame(self.root, bg=Theme.BG_PANEL)
         bar.grid(row=4, column=0, sticky="ew")
@@ -847,17 +896,38 @@ class IRRemoteApp:
             self._empty_hint("暂无按键\n点击「学习按键」添加")
             self.update_info()
             return
-        cols = 4
-        for i, (name, ch) in enumerate(sorted(buttons.items(), key=lambda x: x[1])):
-            r, c = divmod(i, cols)
+        # 按真实遥控器的空间位置摆放
+        used_pos = set()
+        placed = {}
+        deferred = []
+        for name in buttons:
+            key = match_layout_key(name)
+            pos = REMOTE_POS[key] if key is not None else None
+            if pos is not None and pos not in used_pos:
+                placed[name] = pos
+                used_pos.add(pos)
+            else:
+                deferred.append(name)
+
+        # 未匹配到位置的按键，依次排到布局下方
+        extra_row, extra_col = REMOTE_LAYOUT_ROWS, 0
+        for name in deferred:
+            placed[name] = (extra_row, extra_col)
+            extra_col += 1
+            if extra_col >= REMOTE_COLS:
+                extra_col = 0
+                extra_row += 1
+
+        for name, ch in sorted(buttons.items(), key=lambda x: x[1]):
+            r, c = placed[name]
             btn = NeonButton(self.panel_inner, name,
                              lambda c=ch: self.send_ir(c), Theme.CYAN,
-                             width=150, height=54,
+                             width=150, height=36,
                              subtext="CH " + format(ch, "02X"),
-                             font_size=10, expand=True, icon=True,
+                             font_size=9, expand=True, icon=True,
                              icon_command=lambda e, n=name, c=ch: self.show_edit_popup(e, n, c))
-            btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
-        for c in range(cols):
+            btn.grid(row=r, column=c, padx=4, pady=2, sticky="nsew")
+        for c in range(REMOTE_COLS):
             self.panel_inner.columnconfigure(c, weight=1)
         self.update_info()
 
@@ -1115,8 +1185,8 @@ def main():
     root = tk.Tk()
     root.title("电脑红外遥控器 - IR03T")
     root.configure(bg=Theme.BG)
-    root.geometry("1000x880")
-    root.minsize(880, 750)
+    root.geometry("1000x920")
+    root.minsize(880, 800)
 
     try:
         from tkinter import font as tkfont

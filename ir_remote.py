@@ -83,6 +83,29 @@ def match_layout_key(name):
             return key
     return None
 
+
+def layout_positions(buttons):
+    """按真实遥控器位置计算每个按键的 (row, col)"""
+    used_pos = set()
+    placed = {}
+    deferred = []
+    for name in buttons:
+        key = match_layout_key(name)
+        pos = REMOTE_POS[key] if key is not None else None
+        if pos is not None and pos not in used_pos:
+            placed[name] = pos
+            used_pos.add(pos)
+        else:
+            deferred.append(name)
+    extra_row, extra_col = REMOTE_LAYOUT_ROWS, 0
+    for name in deferred:
+        placed[name] = (extra_row, extra_col)
+        extra_col += 1
+        if extra_col >= REMOTE_COLS:
+            extra_col = 0
+            extra_row += 1
+    return placed
+
 # ==================== 主题 ====================
 class Theme:
     BG = "#070B14"
@@ -461,6 +484,64 @@ class NeonConfirm(tk.Toplevel):
         self.destroy()
 
 
+# ==================== 遥控器窗口 ====================
+class RemoteWindow(tk.Toplevel):
+    """独立遥控器窗口（窄长，按真实遥控器位置布局）"""
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        self.title("遥控器")
+        self.configure(bg=Theme.BG, highlightthickness=1,
+                       highlightbackground=Theme.BORDER_HI)
+        self.geometry("400x640")
+        self.resizable(False, False)
+        self._build()
+
+    def _build(self):
+        bar = tk.Frame(self, bg=Theme.BG)
+        bar.pack(fill="x", padx=12, pady=(10, 2))
+        self.title_var = tk.StringVar(value="遥控器")
+        tk.Label(bar, textvariable=self.title_var, bg=Theme.BG, fg=Theme.TEXT,
+                 font=(Theme.FONT_CN, 13, "bold")).pack(side="left")
+        NeonButton(bar, "关闭", self.destroy, Theme.RED, width=62, height=28,
+                   font_size=9).pack(side="right")
+
+        body = tk.Frame(self, bg=Theme.BG_PANEL, highlightthickness=1,
+                        highlightbackground=Theme.BORDER_HI)
+        body.pack(fill="both", expand=True, padx=12, pady=(8, 12))
+        self.grid = tk.Frame(body, bg=Theme.BG_PANEL)
+        self.grid.pack(fill="both", expand=True, padx=10, pady=10)
+        for c in range(REMOTE_COLS):
+            self.grid.columnconfigure(c, weight=1)
+
+    def refresh(self):
+        for w in self.grid.winfo_children():
+            w.destroy()
+        app = self.app
+        name = app.active_remote
+        self.title_var.set("遥控器 · " + (name or "未选择"))
+        if not name:
+            tk.Label(self.grid, text="请先在主界面选择遥控器", bg=Theme.BG_PANEL,
+                     fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 11)).grid(
+                         row=0, column=0, columnspan=REMOTE_COLS, pady=40)
+            return
+        buttons = app.config.get("remotes", {}).get(name, {}).get("buttons", {})
+        if not buttons:
+            tk.Label(self.grid, text="暂无按键\n点击「学习按键」添加", bg=Theme.BG_PANEL,
+                     fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 11)).grid(
+                         row=0, column=0, columnspan=REMOTE_COLS, pady=40)
+            return
+        placed = layout_positions(buttons)
+        for nm, ch in sorted(buttons.items(), key=lambda x: x[1]):
+            r, c = placed[nm]
+            btn = NeonButton(self.grid, nm, lambda c=ch: app.send_ir(c),
+                             Theme.CYAN, width=64, height=44,
+                             subtext="CH " + format(ch, "02X"),
+                             font_size=9, expand=True)
+            btn.grid(row=r, column=c, padx=3, pady=3, sticky="nsew")
+
+
 # ==================== 主应用 ====================
 class IRRemoteApp:
     def __init__(self, root):
@@ -477,6 +558,7 @@ class IRRemoteApp:
         self.active_remote = None
         self._learn_busy = False
         self._loop_count = 0
+        self.remote_win = None
 
         self._build_header()
         self._build_body()
@@ -629,6 +711,8 @@ class IRRemoteApp:
                    height=30, font_size=9).pack(side="left", padx=(0, 4))
         NeonButton(mini, "删除", self.delete_remote, Theme.RED, width=52,
                    height=30, font_size=9).pack(side="left")
+        NeonButton(row, "加载遥控器", self.load_remote_window, Theme.PURPLE,
+                   width=104, height=30, font_size=9).pack(side="left", padx=(8, 0))
 
         grid_wrap = tk.Frame(p, bg=Theme.BG_PANEL)
         grid_wrap.pack(fill="both", expand=True, padx=12, pady=4)
@@ -883,6 +967,33 @@ class IRRemoteApp:
             self.save_config()
             self.log("已删除遥控器: " + name, "warn")
 
+    def load_remote_window(self):
+        win = self.remote_win
+        if win is None or not win.winfo_exists():
+            win = RemoteWindow(self.root, self)
+            self.remote_win = win
+            sw = self.root.winfo_screenwidth()
+            x = self.root.winfo_rootx() + self.root.winfo_width() + 8
+            if x + 400 > sw:
+                x = max(0, self.root.winfo_rootx() - 408)
+            win.geometry("+%d+%d" % (x, max(0, self.root.winfo_rooty())))
+
+            def _gone(e, w=win):
+                if e.widget is w:
+                    self.remote_win = None
+            win.bind("<Destroy>", _gone)
+        win.refresh()
+        win.lift()
+        self.log("已打开遥控器窗口", "sys")
+
+    def sync_remote_window(self):
+        win = self.remote_win
+        if win is not None and win.winfo_exists():
+            try:
+                win.refresh()
+            except Exception:
+                pass
+
     def render_buttons(self):
         for w in self.panel_inner.winfo_children():
             w.destroy()
@@ -897,26 +1008,7 @@ class IRRemoteApp:
             self.update_info()
             return
         # 按真实遥控器的空间位置摆放
-        used_pos = set()
-        placed = {}
-        deferred = []
-        for name in buttons:
-            key = match_layout_key(name)
-            pos = REMOTE_POS[key] if key is not None else None
-            if pos is not None and pos not in used_pos:
-                placed[name] = pos
-                used_pos.add(pos)
-            else:
-                deferred.append(name)
-
-        # 未匹配到位置的按键，依次排到布局下方
-        extra_row, extra_col = REMOTE_LAYOUT_ROWS, 0
-        for name in deferred:
-            placed[name] = (extra_row, extra_col)
-            extra_col += 1
-            if extra_col >= REMOTE_COLS:
-                extra_col = 0
-                extra_row += 1
+        placed = layout_positions(buttons)
 
         for name, ch in sorted(buttons.items(), key=lambda x: x[1]):
             r, c = placed[name]
@@ -930,6 +1022,7 @@ class IRRemoteApp:
         for c in range(REMOTE_COLS):
             self.panel_inner.columnconfigure(c, weight=1)
         self.update_info()
+        self.sync_remote_window()
 
     def _empty_hint(self, text):
         f = tk.Frame(self.panel_inner, bg=Theme.BG_INPUT)

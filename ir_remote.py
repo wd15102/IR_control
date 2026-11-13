@@ -178,7 +178,8 @@ class NeonButton(tk.Canvas):
     def __init__(self, master, text, command=None, color=Theme.CYAN,
                  width=132, height=40, subtext=None, font_size=11, expand=False,
                  icon=False, icon_command=None, draggable=False,
-                 drag_start=None, drag_move=None, drag_end=None):
+                 drag_start=None, drag_move=None, drag_end=None,
+                 repeat=False, repeat_delay=400, repeat_interval=180):
         super().__init__(master, width=(1 if expand else width), height=height,
                          bg=Theme.BG_PANEL, highlightthickness=0, cursor="hand2")
         self._bw, self._bh = (1 if expand else width), height
@@ -196,6 +197,10 @@ class NeonButton(tk.Canvas):
         self.drag_start = drag_start
         self.drag_move = drag_move
         self.drag_end = drag_end
+        self.repeat = repeat
+        self.repeat_delay = repeat_delay
+        self.repeat_interval = repeat_interval
+        self._repeat_after = None
         self._drag_moved = False
         self._drag_x = 0
         self._drag_y = 0
@@ -254,6 +259,15 @@ class NeonButton(tk.Canvas):
         self._drag_x, self._drag_y = event.x, event.y
         if self.draggable and self.drag_start:
             self.drag_start(event)
+        if self.repeat and not self.draggable:
+            on_icon = False
+            if self.icon_command and self._icon_box:
+                x1, y1, x2, y2 = self._icon_box
+                on_icon = x1 <= event.x <= x2 and y1 <= event.y <= y2
+            self._fire(event)
+            if not on_icon:
+                self._repeat_after = self.after(self.repeat_delay,
+                                                self._repeat_tick)
 
     def _on_motion(self, event):
         if not self.draggable:
@@ -263,20 +277,44 @@ class NeonButton(tk.Canvas):
         if self._drag_moved and self.drag_move:
             self.drag_move(event)
 
+    def _on_leave(self, event):
+        if self._repeat_after is not None:
+            self._stop_repeat()
+        self.state = "normal"
+        self.draw()
+
     def _on_release(self, event):
         self.state = "hover"
         self.draw()
+        self._stop_repeat()
         if self.draggable:
             if self._drag_moved and self.drag_end:
                 self.drag_end(event)
             return
-        if self.icon_command and self._icon_box:
+        if not self.repeat:
+            self._fire(event)
+
+    def _fire(self, event=None):
+        if event is not None and self.icon_command and self._icon_box:
             x1, y1, x2, y2 = self._icon_box
             if x1 <= event.x <= x2 and y1 <= event.y <= y2:
                 self.icon_command(event)
                 return
         if self.command:
             self.command()
+
+    def _repeat_tick(self):
+        self._repeat_after = None
+        self._fire()
+        self._repeat_after = self.after(self.repeat_interval, self._repeat_tick)
+
+    def _stop_repeat(self):
+        if self._repeat_after is not None:
+            try:
+                self.after_cancel(self._repeat_after)
+            except Exception:
+                pass
+            self._repeat_after = None
 
     def draw(self):
         self.delete("all")
@@ -625,7 +663,7 @@ class RemoteWindow(tk.Toplevel):
             r, c = placed[nm]
             btn = NeonButton(self.grid, nm, lambda c=ch, n=nm: app.send_ir(c, n),
                              Theme.CYAN, width=64, height=58, subtext=None,
-                             font_size=13, expand=True,
+                             font_size=13, expand=True, repeat=True,
                              draggable=self.edit_mode,
                              drag_start=lambda e, n=nm: None,
                              drag_move=lambda e, n=nm: self._drag_move(e, n),
@@ -703,7 +741,6 @@ class IRRemoteApp:
         self.config = self.load_config()
         self.active_remote = None
         self._learn_busy = False
-        self._loop_count = 0
         self.remote_win = None
         # 自动连接：启动时自动发现串口并连接；手动断开后停止自动重连
         self._auto_connect_allowed = True
@@ -895,9 +932,6 @@ class IRRemoteApp:
         self.btn_learn = NeonButton(learn_row, "学习按键", self.learn_single,
                                     Theme.AMBER, width=150, height=36)
         self.btn_learn.pack(side="left", padx=(0, 8))
-        self.btn_loop = NeonButton(learn_row, "连续学习", self.learn_loop,
-                                   Theme.PURPLE, width=150, height=36)
-        self.btn_loop.pack(side="left")
         tk.Label(learn_row, text="点右上角图标：删除 / 重新学习", bg=Theme.BG_PANEL,
                  fg=Theme.TEXT_FAINT, font=(Theme.FONT_CN, 9)).pack(side="right")
 
@@ -1065,7 +1099,7 @@ class IRRemoteApp:
             return
         label = ("[" + name + "]") if name else ("通道 " + format(channel, "02X"))
         self.log("发送 " + label + " 按键", "cmd")
-        resp = self.send_frame(build_frame(CMD_SEND, channel))
+        resp = self.send_frame(build_frame(CMD_SEND, channel), timeout=0.15)
         if check_resp(resp, RESP_SEND_DONE):
             self.set_status("已发送: " + label)
             self.log("发送完成, 模块反馈 " + RESP_SEND_DONE, "ok")
@@ -1212,7 +1246,7 @@ class IRRemoteApp:
                              lambda c=ch, n=name: self.send_ir(c, n), Theme.CYAN,
                              width=150, height=54,
                              subtext="CH " + format(ch, "02X"),
-                             font_size=10, expand=True, icon=True,
+                             font_size=10, expand=True, icon=True, repeat=True,
                              icon_command=lambda e, n=name, c=ch: self.show_edit_popup(e, n, c))
             btn.grid(row=r, column=c, padx=4, pady=4, sticky="nsew")
         for c in range(cols):
@@ -1361,84 +1395,6 @@ class IRRemoteApp:
             self.log("学习失败: " + msg, "err")
             messagebox.showerror("学习失败", msg)
 
-    def learn_loop(self):
-        if not self._check_serial():
-            return
-        if not self.active_remote:
-            messagebox.showwarning("提示", "请先选择或新建遥控器")
-            return
-        win = tk.Toplevel(self.root)
-        win.title("连续学习模式")
-        win.configure(bg=Theme.BG_PANEL)
-        win.geometry("560x460")
-        win.transient(self.root)
-        center_window(win, self.root)
-        self._loop_count = 0
-
-        tk.Label(win, text="连续学习模式 · BATCH LEARN", bg=Theme.BG_PANEL,
-                 fg=Theme.CYAN, font=(Theme.FONT_CN, 13, "bold")).pack(
-                     anchor="w", padx=18, pady=(16, 4))
-        tk.Label(win, text="输入按键名称后点击「学习」，对准原遥控器按下对应按键",
-                 bg=Theme.BG_PANEL, fg=Theme.TEXT_DIM,
-                 font=(Theme.FONT_CN, 9)).pack(anchor="w", padx=18)
-
-        row = tk.Frame(win, bg=Theme.BG_PANEL)
-        row.pack(fill="x", padx=18, pady=10)
-        entry = tk.Entry(row, bg=Theme.BG_INPUT, fg=Theme.TEXT,
-                         font=(Theme.FONT_CN, 11), relief="flat",
-                         insertbackground=Theme.CYAN, highlightthickness=1,
-                         highlightbackground=Theme.BORDER)
-        entry.pack(side="left", fill="x", expand=True, ipady=5)
-        entry.focus_set()
-
-        log_view = TerminalLog(win, height=120)
-        log_view.pack(fill="both", expand=True, padx=18, pady=(0, 8))
-
-        bottom = tk.Frame(win, bg=Theme.BG_PANEL)
-        bottom.pack(fill="x", padx=18, pady=(0, 14))
-        lbl_count = tk.Label(bottom, text="本次已学习 0 个按键",
-                             bg=Theme.BG_PANEL, fg=Theme.TEXT_DIM,
-                             font=(Theme.FONT_CN, 9))
-        lbl_count.pack(side="left")
-
-        def do_learn():
-            name = entry.get().strip()
-            if not name:
-                return
-            if name in self.config["remotes"][self.active_remote]["buttons"]:
-                log_view.log("警告: 按键 " + name + " 已存在, 跳过", "warn")
-                return
-            free = self._next_free_channel()
-            if free is None:
-                log_view.log("警告: 通道已用完", "warn")
-                return
-            log_view.log("进入学习模式: " + name + " -> CH " + format(free, "02X"),
-                         "cmd")
-            threading.Thread(target=self._loop_worker,
-                             args=(name, free, log_view.log, lbl_count),
-                             daemon=True).start()
-            entry.delete(0, "end")
-
-        NeonButton(row, "学 习", do_learn, Theme.CYAN, width=96,
-                   height=36).pack(side="left", padx=(8, 0))
-        NeonButton(bottom, "完 成", lambda: (self.save_config(), win.destroy()),
-                   Theme.GREEN, width=100, height=34).pack(side="right")
-        entry.bind("<Return>", lambda e: do_learn())
-
-    def _loop_worker(self, name, channel, log_fn, lbl_count):
-        ok, msg = self.learn_ir(channel)
-        self.root.after(0, lambda: self._loop_done(name, channel, ok, msg,
-                                                   log_fn, lbl_count))
-
-    def _loop_done(self, name, channel, ok, msg, log_fn, lbl_count):
-        if ok:
-            self.config["remotes"][self.active_remote]["buttons"][name] = channel
-            self._loop_count += 1
-            lbl_count.config(text="本次已学习 " + str(self._loop_count) + " 个按键")
-            log_fn("成功: " + name + " -> CH " + format(channel, "02X"), "ok")
-            self.render_buttons()
-        else:
-            log_fn("失败: " + name + " - " + msg, "err")
 
 
 # ==================== 协议工具 ====================
